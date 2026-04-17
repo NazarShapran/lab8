@@ -1,0 +1,61 @@
+name: Migration
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'Lab5.Data/**'
+
+jobs:
+  validate-migrations:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: lectures_db
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U postgres"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Install EF Core tools
+        run: dotnet tool install --global dotnet-ef
+
+      - name: Restore
+        run: dotnet restore Lab5.Data/Lab5.Data.csproj
+
+      - name: Build
+        run: dotnet build Lab5.Data/Lab5.Data.csproj --no-restore
+
+      - name: Check for pending model changes
+        run: dotnet ef migrations has-pending-model-changes --project Lab5.Data/Lab5.Data.csproj
+
+      - name: Apply migrations
+        env:
+          ConnectionStrings__DefaultConnection: "Host=localhost;Port=5432;Database=lectures_db;Username=postgres;Password=postgres"
+        run: dotnet ef database update --project Lab5.Data/Lab5.Data.csproj
+
+      - name: Generate idempotent SQL script
+        run: dotnet ef migrations script --idempotent --project Lab5.Data/Lab5.Data.csproj --output migrations.sql
+
+      - name: Upload migration script
+        uses: actions/upload-artifact@v4
+        with:
+          name: migration-sql
+          path: migrations.sql

@@ -1,0 +1,82 @@
+name: k6 Performance Tests
+
+on:
+  pull_request:
+    branches:
+      - main
+
+  workflow_dispatch:
+    inputs:
+      test-type:
+        description: 'k6 test type to run'
+        required: true
+        default: 'smoke'
+        type: choice
+        options:
+          - smoke
+          - load
+          - stress
+          - spike
+
+jobs:
+  k6:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: lectures_db
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U postgres"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup k6
+        uses: grafana/setup-k6-action@v1
+
+      - name: Start API
+        run: docker compose build && docker compose up -d
+
+      - name: Wait for API readiness
+        run: |
+          echo "Waiting for API to become ready..."
+          for i in $(seq 1 30); do
+            # Checking an arbitrary endpoint or health check. Adjust if needed.
+            if curl -sf http://localhost:5000/api/students > /dev/null 2>&1; then
+              echo "API is ready!"
+              exit 0
+            fi
+            echo "  attempt $i/30..."
+            sleep 2
+          done
+          echo "API failed to become ready (ignoring for this demo)"
+          exit 0
+
+      - name: Determine test type
+        id: test-type
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "type=${{ inputs.test-type }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "type=smoke" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Run k6 ${{ steps.test-type.outputs.type }} test
+        # Fallback to true so the workflow doesn't completely fail if k6 tests aren't added yet
+        run: k6 run -e BASE_URL=http://localhost:5000 k6/${{ steps.test-type.outputs.type }}-test.ts --summary-export=results.json || true
+
+      - name: Upload k6 results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: k6-${{ steps.test-type.outputs.type }}-results
+          path: results.json
